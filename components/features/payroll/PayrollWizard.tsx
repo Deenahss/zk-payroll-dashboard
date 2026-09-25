@@ -30,7 +30,12 @@ import { useWalletStore } from "@/stores/walletStore";
 import { useApprovalHistory } from "@/stores/approvalHistory";
 import { useSession } from "@/hooks/useSession";
 import { IncidentBanner } from "@/components/ui/IncidentBanner";
-import { MOCK_COMPANIES, MOCK_EMPLOYEES, MOCK_PAYROLL_RUNS, MOCK_TREASURY_BALANCE } from "@/lib/api/mockData";
+import {
+  MOCK_COMPANIES,
+  MOCK_EMPLOYEES,
+  MOCK_PAYROLL_RUNS,
+  MOCK_TREASURY_BALANCE,
+} from "@/lib/api/mockData";
 import PayrollReceipt from "./PayrollReceipt";
 import PayrollApprovalAuditTrail from "./PayrollApprovalAuditTrail";
 import { usePayrollAuditTrailStore } from "@/stores/payrollAuditTrail";
@@ -42,7 +47,16 @@ import { useEnvironmentStore } from "@/stores/environment";
 import { ContractErrorHelpButton } from "@/components/features/errors/ContractErrorDrawer";
 import { MissingProofWarning } from "@/components/features/proofs/MissingProofWarning";
 import type { PayrollRun, PayrollWizardStep } from "@/types";
-import { trackEvent, mapErrorToType, bucketEmployeeCount } from "@/lib/telemetry";
+import {
+  trackEvent,
+  mapErrorToType,
+  bucketEmployeeCount,
+} from "@/lib/telemetry";
+import {
+  PayrollActionLoader,
+  getPayrollButtonAriaLabel,
+} from "@/components/ui/PayrollActionLoader";
+import type { PayrollLoadingPhase } from "@/components/ui/PayrollActionLoader";
 
 const STEPS: { key: PayrollWizardStep; label: string }[] = [
   { key: "review", label: "Review" },
@@ -178,7 +192,13 @@ function PayrollWizard() {
     trackEvent("payroll_wizard_started", {
       employeeCountBucket: bucketEmployeeCount(selected.length),
     });
-  }, [setEmployeeIds, setTotalAmount, addApprovalEvent, walletPublicKey, logEvent]);
+  }, [
+    setEmployeeIds,
+    setTotalAmount,
+    addApprovalEvent,
+    walletPublicKey,
+    logEvent,
+  ]);
 
   const handleGenerateProof = useCallback(async () => {
     if (isWrongNetwork) {
@@ -233,11 +253,7 @@ function PayrollWizard() {
           details: errMsg,
         });
       }
-      addApprovalEvent(
-        "proof_generation_failed",
-        walletPublicKey,
-        errMsg,
-      );
+      addApprovalEvent("proof_generation_failed", walletPublicKey, errMsg);
       trackEvent("payroll_proof_generation_completed", {
         success: false,
         error_type: mapErrorToType(errMsg),
@@ -246,7 +262,18 @@ function PayrollWizard() {
         description: "Circuit constraint mismatch.",
       });
     }
-  }, [setProofStatus, setProofError, nextStep, isWrongNetwork, expectedNetwork, addApprovalEvent, walletPublicKey, payrollRunId, logEvent, selectedEmployees.length, totalAmount]);
+  }, [
+    setProofStatus,
+    setProofError,
+    nextStep,
+    isWrongNetwork,
+    addApprovalEvent,
+    walletPublicKey,
+    payrollRunId,
+    logEvent,
+    selectedEmployees.length,
+    totalAmount,
+  ]);
 
   const handleSubmit = useCallback(async () => {
     if (isWrongNetwork) {
@@ -336,7 +363,20 @@ function PayrollWizard() {
           "Network timeout. The transaction may still be processing.",
       });
     }
-  }, [setSubmissionStatus, setSubmissionError, setTransactionHash, nextStep, isWrongNetwork, expectedNetwork, addApprovalEvent, walletPublicKey, employeeIds, totalAmount, payrollRunId, logEvent, selectedEmployees.length]);
+  }, [
+    setSubmissionStatus,
+    setSubmissionError,
+    setTransactionHash,
+    nextStep,
+    isWrongNetwork,
+    addApprovalEvent,
+    walletPublicKey,
+    employeeIds,
+    totalAmount,
+    payrollRunId,
+    logEvent,
+    selectedEmployees.length,
+  ]);
 
   const handleReviewNext = useCallback(() => {
     if (payrollRunId) {
@@ -370,7 +410,10 @@ function PayrollWizard() {
   return (
     <section aria-labelledby="payroll-wizard-heading" className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 id="payroll-wizard-heading" className="text-lg font-semibold text-gray-900">
+        <h2
+          id="payroll-wizard-heading"
+          className="text-lg font-semibold text-gray-900"
+        >
           Execute Payroll
         </h2>
         <button
@@ -472,6 +515,10 @@ function PayrollWizard() {
       <nav
         aria-label="Payroll execution progress"
         className="flex items-center"
+        aria-busy={
+          (currentStep === "proof" && proofStatus === "generating") ||
+          (currentStep === "submit" && submissionStatus === "submitting")
+        }
       >
         {STEPS.map((step, i) => (
           <div key={step.key} className="flex items-center shrink-0">
@@ -654,6 +701,14 @@ function ProofStep({
   onBack: () => void;
   isWrongNetwork: boolean;
 }) {
+  // Map wizard proof status to PayrollLoadingPhase
+  const phase: PayrollLoadingPhase =
+    status === "generating"
+      ? "generating"
+      : status === "error"
+        ? "error"
+        : "idle";
+
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-gray-900">
@@ -665,12 +720,24 @@ function ProofStep({
         details.
       </p>
 
+      {/* Accessible loading / error state */}
+      <PayrollActionLoader
+        phase={phase}
+        actionLabel="Generating zero-knowledge proof"
+        errorMessage={
+          error
+            ? "Proof generation failed. Please retry. No payroll data has been submitted."
+            : undefined
+        }
+      />
+
       {status === "idle" && (
         <div className="text-center py-6">
           <button
             type="button"
             onClick={onGenerate}
             disabled={isWrongNetwork}
+            aria-label={getPayrollButtonAriaLabel("Generate Proof", phase)}
             title={
               isWrongNetwork ? "Switch to Testnet in Freighter" : undefined
             }
@@ -681,36 +748,21 @@ function ProofStep({
         </div>
       )}
 
-      {status === "generating" && (
-        <div className="text-center py-6 space-y-3">
-          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
-          <p className="text-sm text-gray-600">
-            Generating ZK proof... This may take a few moments.
-          </p>
-          <div className="w-48 h-1.5 bg-gray-200 rounded-full mx-auto overflow-hidden">
-            <div
-              className="h-full bg-indigo-600 rounded-full animate-pulse"
-              style={{ width: "60%" }}
-            />
-          </div>
-        </div>
-      )}
-
       {status === "error" && (
-        <div className="text-center py-6 space-y-3">
-          <AlertCircle className="w-8 h-8 text-red-500 mx-auto" />
-          <p className="text-sm text-red-700">{error}</p>
-          <div className="flex flex-col sm:flex-row justify-center gap-3">
-            <button
-              type="button"
-              onClick={onRetry}
-              className="w-full sm:w-auto px-4 py-2 rounded-md bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 border border-red-200 transition-colors inline-flex justify-center items-center gap-1"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Retry
-            </button>
-            <ContractErrorHelpButton error={error} />
-          </div>
+        <div className="flex flex-col sm:flex-row justify-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onRetry}
+            aria-label={getPayrollButtonAriaLabel(
+              "Retry proof generation",
+              "error",
+            )}
+            className="w-full sm:w-auto px-4 py-2 rounded-md bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 border border-red-200 transition-colors inline-flex justify-center items-center gap-1"
+          >
+            <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+            Retry
+          </button>
+          <ContractErrorHelpButton error={error} />
         </div>
       )}
 
@@ -819,11 +871,19 @@ function ConfirmStep({
 
     // 5. Stale session check
     if (isSessionExpired) {
-      list.push("Your session has expired. Wallet signing cannot proceed with stale authentication. Please re-authenticate before submitting.");
+      list.push(
+        "Your session has expired. Wallet signing cannot proceed with stale authentication. Please re-authenticate before submitting.",
+      );
     }
 
     return list;
-  }, [treasuryBalance, totalAmount, store.proofStatus, selectedEmployees, isSessionExpired]);
+  }, [
+    treasuryBalance,
+    totalAmount,
+    store.proofStatus,
+    selectedEmployees,
+    isSessionExpired,
+  ]);
 
   const warnings = useMemo(() => {
     const list: string[] = [];
@@ -876,12 +936,21 @@ function ConfirmStep({
       list.push(
         `Payroll draft conflict detected with ${conflictingRuns
           .map((run) => run.id)
-          .join(", ")}. Another admin is already preparing this employee batch.`,
+          .join(
+            ", ",
+          )}. Another admin is already preparing this employee batch.`,
       );
     }
 
     return list;
-  }, [treasuryBalance, totalAmount, store.proofStatus, isProofNearingExpiration, selectedEmployees, conflictingRuns]);
+  }, [
+    treasuryBalance,
+    totalAmount,
+    store.proofStatus,
+    isProofNearingExpiration,
+    selectedEmployees,
+    conflictingRuns,
+  ]);
 
   const state: "ready" | "warning" | "blocked" = useMemo(() => {
     if (blockers.length > 0) return "blocked";
@@ -1074,15 +1143,16 @@ function ConfirmStep({
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 shrink-0" />
           <div className="flex-1">
-            <h4 className="text-sm font-semibold text-red-800">Draft conflict detected</h4>
+            <h4 className="text-sm font-semibold text-red-800">
+              Draft conflict detected
+            </h4>
             <p className="text-sm text-red-700 mt-0.5">
-              Another payroll draft is already tracking the selected employee batch. Resolve or discard the overlapping run before submitting.
+              Another payroll draft is already tracking the selected employee
+              batch. Resolve or discard the overlapping run before submitting.
             </p>
             <ul className="list-disc list-inside text-xs text-red-700 mt-2 space-y-1">
               {conflictingRuns.map((run) => (
-                <li key={run.id}>
-                  Run {run.id} is still pending review.
-                </li>
+                <li key={run.id}>Run {run.id} is still pending review.</li>
               ))}
             </ul>
           </div>
@@ -1315,7 +1385,10 @@ function ConfirmStep({
             disabled={state === "blocked"}
             className="w-4 h-4 text-indigo-600 border-gray-300 rounded mt-0.5 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           />
-          <label htmlFor="confirm-checkbox" className="cursor-pointer select-none">
+          <label
+            htmlFor="confirm-checkbox"
+            className="cursor-pointer select-none"
+          >
             <span className="text-sm font-medium text-gray-900 block">
               Confirm Payroll Execution Summary
             </span>
@@ -1330,20 +1403,20 @@ function ConfirmStep({
       </div>
 
       {/* Navigation Buttons */}
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3 mb-4">
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3 mb-4">
         <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
         <div>
           <p className="text-sm font-medium text-amber-800">
             Irreversible Action
           </p>
           <p className="text-sm text-amber-700 mt-1">
-            Once submitted, this payroll transaction cannot be reversed. Please ensure all details are correct.
+            Once submitted, this payroll transaction cannot be reversed. Please
+            ensure all details are correct.
           </p>
         </div>
       </div>
 
       <div className="flex flex-col-reverse sm:flex-row sm:justify-between pt-4 border-t gap-3 sm:gap-0">
-
         <button
           type="button"
           onClick={onBack}
@@ -1355,7 +1428,12 @@ function ConfirmStep({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={!confirmed || state === "blocked" || isWrongNetwork || isSessionExpired}
+          disabled={
+            !confirmed ||
+            state === "blocked" ||
+            isWrongNetwork ||
+            isSessionExpired
+          }
           title={
             isWrongNetwork
               ? "Switch to Testnet in Freighter"
@@ -1396,18 +1474,27 @@ function SubmitStep({
   isWrongNetwork: boolean;
   expectedNetwork: string;
 }) {
+  const phase: PayrollLoadingPhase =
+    status === "submitting"
+      ? "submitting"
+      : status === "error"
+        ? "error"
+        : "idle";
+
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-gray-900">Submission</h3>
 
-      {status === "submitting" && (
-        <div className="text-center py-8 space-y-3">
-          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mx-auto" />
-          <p className="text-sm text-gray-600">
-            Submitting payroll transaction to Stellar network...
-          </p>
-        </div>
-      )}
+      {/* Accessible loader covers submitting + error announcements */}
+      <PayrollActionLoader
+        phase={phase}
+        actionLabel="Submitting payroll transaction"
+        errorMessage={
+          error
+            ? "Submission failed. No funds have been moved. Review the details and retry when ready."
+            : undefined
+        }
+      />
 
       {status === "success" && (
         <PayrollReceipt
@@ -1419,36 +1506,30 @@ function SubmitStep({
       )}
 
       {status === "error" && (
-        <div className="text-center py-8 space-y-3">
-          <AlertCircle className="w-8 h-8 text-red-500 mx-auto" />
-          <h4 className="text-lg font-semibold text-red-700">
-            Submission Failed
-          </h4>
-          <p className="text-sm text-red-600">{error}</p>
-          <div className="flex flex-col sm:flex-row justify-center gap-3 mt-4">
-            <button
-              type="button"
-              onClick={onRetry}
-              disabled={isWrongNetwork}
-              title={
-                isWrongNetwork
-                  ? `Switch to ${expectedNetwork} in your wallet`
-                  : undefined
-              }
-              className="px-4 py-2 rounded-md bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 border border-red-200 transition-colors inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Retry Submission
-            </button>
-            <button
-              type="button"
-              onClick={onReset}
-              className="w-full sm:w-auto px-4 py-2 rounded-md bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200 transition-colors inline-flex justify-center"
-            >
-              Start Over
-            </button>
-            <ContractErrorHelpButton error={error} />
-          </div>
+        <div className="flex flex-col sm:flex-row justify-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={isWrongNetwork}
+            aria-label={getPayrollButtonAriaLabel("Retry submission", "error")}
+            title={
+              isWrongNetwork
+                ? `Switch to ${EXPECTED_NETWORK} in your wallet`
+                : undefined
+            }
+            className="px-4 py-2 rounded-md bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 border border-red-200 transition-colors inline-flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+            Retry Submission
+          </button>
+          <button
+            type="button"
+            onClick={onReset}
+            className="w-full sm:w-auto px-4 py-2 rounded-md bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200 transition-colors inline-flex justify-center"
+          >
+            Start Over
+          </button>
+          <ContractErrorHelpButton error={error} />
         </div>
       )}
     </div>
